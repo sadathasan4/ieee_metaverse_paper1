@@ -11,7 +11,7 @@ library(writexl)
 
 
 ```{r}
-ieee_metaverse = read_xlsx("IEEE METAVERSE All LIST.xlsx",sheet = "Metaverse") 
+ieee_metaverse = read_xlsx("META_V2.xlsx",sheet = "Metaverse") 
 
 str(ieee_metaverse)
 ```
@@ -28,12 +28,12 @@ d1 = ieee_metaverse |>
 library(zoo)
 
 d1 %>%
-  filter(!is.na(`Date Added To Xplore`)) %>%
+  filter(!is.na(`Date Added To Xplore`) & `Date Added To Xplore` < as.Date("2024-11-01")) %>%
   filter(`Publication Year` > 2020) %>%
   count(DATE = as.yearmon(`Date Added To Xplore`, "%m/%d/%Y")) %>%
   mutate(`IEEE Publications on Metaverse` = n) %>%
   ggplot(aes(DATE, `IEEE Publications on Metaverse`)) +
-    geom_line(color = "#00AFBB") +
+    geom_line(color = "#00AFBB",size=.8) +
     geom_point(color = "#FC4E07") +
     scale_x_yearmon() +
   theme_bw() + 
@@ -46,7 +46,7 @@ d1 %>%
     ),
     legend.justification = c(0, 1),
     legend.position = c(0, 1),
-    axis.ticks = element_line(colour = "grey70", linewidth = 0.2),
+    axis.ticks = element_line(colour = "grey70", linewidth = 1),
     panel.grid.major = element_line(colour = "grey70", linewidth = 0.2),
     panel.grid.minor = element_blank()
   )
@@ -75,6 +75,7 @@ library(visNetwork)
 
 dg = d2 |>
   filter(!is.na(`Publication Year`)) |>
+  filter(!is.na(`Date Added To Xplore`) & `Date Added To Xplore` < as.Date("2024-11-01")) |>
   filter(`Publication Year` > 2020) |>
   mutate(`IEEE Terms` = toupper(`IEEE Terms`))
 
@@ -93,9 +94,9 @@ dgx = dg |>
   select(X1, X2, color = `Publication Year`) |>
   ungroup() |>
   filter(!is.na(X2)) |>
-  filter(!is.na(X1)) |>
-  filter(X1 != "METAVERSE") |>
-  filter(X2 != "METAVERSE")
+  filter(!is.na(X1)) 
+  # filter(X1 != "METAVERSE") |>
+  # filter(X2 != "METAVERSE")
 
 dgx1 = dgx |>
   group_by(X1,X2,color) |>
@@ -143,6 +144,73 @@ visNetwork(nodes, edges) %>%
       visEdges(arrows = "middle") %>%
       visInteraction(multiselect = TRUE, navigationButtons = TRUE)
 ```
+
+## Clustering
+
+```{r}
+
+dgx2 = dgx1 |>
+  group_by(X1,X2) |>
+  summarise(count = sum(count)) |>
+  ungroup()
+
+edges_x = dgx2 |>
+  rename(weight = count) |>
+  rename(from = X1, to = X2) |>
+  mutate(width = weight / 2000) |>
+  filter(weight > 600)
+
+nodes = rbind(edges_x |> select(from) |> rename(label = from),edges_x |> select(to) |> rename(label = to)) |>
+  distinct(label) |> mutate(id = label) |> relocate(id,.before = label)
+
+edges = edges_x
+    
+graph <- graph_from_data_frame(edges, directed = FALSE)
+
+degree_value = degree(graph)
+
+nodes$value = degree_value[match(nodes$id, names(degree_value))]
+
+
+#Louvain Comunity Detection
+cluster <- cluster_infomap(graph)
+
+cluster_df = bind_cols(data.frame(cluster$names),data.frame(cluster$membership)) |>
+  rename(label = cluster.names, group = cluster.membership)
+
+## MANIPULATION
+
+write_xlsx(cluster_df,"cluster_df.xlsx")
+
+## EDITED
+
+cluster_df_e = read_xlsx("cluster_df.xlsx")
+
+#Create group column
+nodes <- merge(x = nodes, y = cluster_df_e, by = "label", all.x = TRUE)
+
+edges_meta = edges |>
+  filter(from %in% c("METAVERSE"))
+
+
+visNetwork(nodes, edges_meta, width = "100%", height = "100vh") %>%
+      visIgraphLayout(layout = "layout_nicely") %>%
+      visOptions(manipulation = TRUE) %>%
+      visInteraction(multiselect = TRUE, navigationButtons = TRUE)
+
+```
+
+```{r}
+clf = read_xlsx("cluster_details_metaverse.xlsx")
+
+clf |>
+  group_by(`CLUSTER TOPIC`,`CLUSTER NUMBER`) |>
+  summarise(Keywords = paste(TERMS,collapse = ", ")) |>
+  ungroup() |>
+  arrange(`CLUSTER NUMBER`) |>
+  write_xlsx("Cluster_Details.xlsx")
+```
+
 
 
 
@@ -226,37 +294,44 @@ g1
 edx1 = dgx1 |>
   filter(X1 %in% c("EDUCATION","EDUCATIONAL INSTITUTIONS","EDUCATIONAL PROGRAMS","EDUCATIONAL TECHNOLOGY") | X2 %in% c("EDUCATION","EDUCATIONAL INSTITUTIONS","EDUCATIONAL PROGRAMS","EDUCATIONAL TECHNOLOGY"))
 
+edx2 = edx1 |>
+  group_by(X1,X2) |>
+  summarise(count = sum(count)) |>
+  ungroup()
 
-edges_x = edx1 |>
-  select(X1,X2,count) |>
+edges_x = edx2 |>
   rename(weight = count) |>
+  rename(from = X1, to = X2) |>
   mutate(width = weight / 500) |>
-  filter(weight > 1000)
+  filter(weight > 30)
 
-nodes = rbind(edges_x |> select(X1) |> rename(label = X1),edges_x |> select(X2) |> rename(label = X2)) |>
-  distinct(label) |> rowid_to_column("id")
+nodes = rbind(edges_x |> select(from) |> rename(label = from),edges_x |> select(to) |> rename(label = to)) |>
+  distinct(label) |> mutate(id = label) |> relocate(id,.before = label)
 
-edges = edges_x |>
-      left_join(nodes, by = c("X1" = "label")) |>
-      rename(from = id)
+edges = edges_x
     
-edges = edges |>
-      left_join(nodes, by = c("X2" = "label")) |>
-      rename(to = id)
-
-edges = select(edges, from, to, weight, width)
-
-graph = graph.data.frame(edges, directed = T)
+graph <- graph_from_data_frame(edges, directed = FALSE)
 
 degree_value = degree(graph)
 
 nodes$value = degree_value[match(nodes$id, names(degree_value))]
-    
+
+
+#Louvain Comunity Detection
+cluster <- cluster_infomap(graph)
+
+cluster_df = bind_cols(data.frame(cluster$names),data.frame(cluster$membership)) |>
+  rename(label = cluster.names, group = cluster.membership)
+
+#Create group column
+nodes <- merge(x = nodes, y = cluster_df, by = "label", all.x = TRUE)
+
+
 visNetwork(nodes, edges) %>%
       visIgraphLayout(layout = "layout_with_fr") %>%
       visOptions(manipulation = TRUE) %>%
-      visEdges(arrows = "middle") %>%
       visInteraction(multiselect = TRUE, navigationButtons = TRUE)
+
 ```
 
 
@@ -356,7 +431,7 @@ dx2 |>
   ungroup() |>
   arrange(desc(count)) |>
   slice_head(n = 20) |>
-  write_xlsx("IEEE TERMS.xlsx")
+  write_xlsx("IEEE TERMS UPDATED 2024.xlsx")
 ```
 
 ```{r}
@@ -382,6 +457,33 @@ d1_edu = ieee_edu |>
   mutate(`Date Added To Xplore` = as.Date(`Date Added To Xplore`)) |>
   mutate(`Online Date` = as.Date(`Online Date`)) |>
   select(`Document Title`,`Date Added To Xplore`,`Publication Year`,Abstract,`IEEE Terms`,`Reference Count`,`Article Citation Count`,`Online Date`)
+
+##UPDATE
+
+d1 %>%
+  filter(str_detect(tolower(`IEEE Terms`),"education")) |>
+  filter(!is.na(`Date Added To Xplore`) & `Date Added To Xplore` < as.Date("2024-11-01")) %>%
+  filter(`Publication Year` > 2020) %>%
+  count(DATE = as.yearmon(`Date Added To Xplore`, "%m/%d/%Y")) %>%
+  mutate(`IEEE Publications on Metaverse on Education` = n) %>%
+  ggplot(aes(DATE, `IEEE Publications on Metaverse on Education`)) +
+    geom_line(color = "#00AFBB",size=.8) +
+    geom_point(color = "#FC4E07") +
+    scale_x_yearmon() +
+  theme_bw() + 
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    legend.background = element_rect(
+      fill = "white", 
+      linewidth = 4, 
+      colour = "white"
+    ),
+    legend.justification = c(0, 1),
+    legend.position = c(0, 1),
+    axis.ticks = element_line(colour = "grey70", linewidth = 1),
+    panel.grid.major = element_line(colour = "grey70", linewidth = 0.2),
+    panel.grid.minor = element_blank()
+  )
 
 
 ```
@@ -416,7 +518,14 @@ d1_edu %>%
 
 
 ```{r}
-d2_edu = d1_edu |>
+d1 |>
+  filter(str_detect(tolower(`IEEE Terms`),"education")) |>
+  filter(!is.na(`Date Added To Xplore`) & `Date Added To Xplore` < as.Date("2024-11-01"))
+
+
+d2_edu = d1 |>
+  filter(str_detect(tolower(`IEEE Terms`),"education")) |>
+  filter(!is.na(`Date Added To Xplore`) & `Date Added To Xplore` < as.Date("2024-11-01")) |>
   select(`Date Added To Xplore`,`Publication Year`,`Article Citation Count`,`IEEE Terms`)
 
 dx1_edu = d2_edu |>
@@ -437,7 +546,7 @@ dx2_edu |>
   ungroup() |>
   arrange(desc(count)) |>
   slice_head(n = 25) |>
-  write_xlsx("META_EDU TERMS.xlsx")
+  write_xlsx("META_EDU TERMS UPDATED 2024.xlsx")
 ```
 
 

@@ -1,0 +1,11 @@
+Methodology:
+
+ - IEEE Explore, Science Direct, Elsevier Papers Related to Education + Technology
+ - Selected 1000 Most Relevant Papers based on Keywords Meta Data, Dated from 2020 to 2024
+ - Created Undirected Graphs using Metadata Keywords
+ - Initial Nodes Count = 881
+ - Filter most prominent Nodes based on Weight by using formula --> (weight/2000 > 600 OR Keywords presence of Metaverse of Weight/2000 >= 27)
+ - Final Nodes Count was 189
+ - Clustering Algorithms used - Infomap Community Detection Algorithm. The basic idea behind the InfoMap algorithm is to use community partitions of the graph as a Huffman code that compresses the information about a random walker exploring your graph. See https://en.wikipedia.org/wiki/Huffman_coding
+ - Resulting Graph had 8 Clusters
+ - Tools and Tech used: R programming with visnetwork and igraph libraries

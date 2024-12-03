@@ -1,0 +1,656 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(writexl)
+```
+
+
+```{r}
+ieee_metaverse = read_xlsx("EDU_V2.xlsx") 
+
+str(ieee_metaverse)
+```
+
+```{r}
+d1 = ieee_metaverse |>
+  mutate(`Date Added To Xplore` = as.Date(`Date Added To Xplore`)) |>
+  mutate(`Online Date` = as.Date(`Online Date`)) |>
+  select(`Document Title`,`Date Added To Xplore`,`Publication Year`,Abstract,`IEEE Terms`,`Reference Count`,`Article Citation Count`,`Online Date`)
+```
+
+```{r}
+max(d1$`Date Added To Xplore`)
+```
+
+
+
+```{r}
+library(zoo)
+
+d1 %>%
+  #filter(!is.na(`Date Added To Xplore`) & `Date Added To Xplore` < as.Date("2024-11-01")) %>%
+  #filter(`Publication Year` > 2020) %>%
+  count(DATE = as.yearmon(`Date Added To Xplore`, "%m/%d/%Y")) %>%
+  mutate(`IEEE Publications on Education` = n) %>%
+  ggplot(aes(DATE, `IEEE Publications on Education`)) +
+    geom_line(color = "#00AFBB",size=.8) +
+    geom_point(color = "#FC4E07") +
+    scale_x_yearmon() +
+  theme_bw() + 
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    legend.background = element_rect(
+      fill = "white", 
+      linewidth = 4, 
+      colour = "white"
+    ),
+    legend.justification = c(0, 1),
+    legend.position = c(0, 1),
+    axis.ticks = element_line(colour = "grey70", linewidth = 1),
+    panel.grid.major = element_line(colour = "grey70", linewidth = 0.2),
+    panel.grid.minor = element_blank()
+  )
+```
+
+
+
+```{r}
+d2 = d1 |>
+  select(`Date Added To Xplore`,`Publication Year`,`Article Citation Count`,`IEEE Terms`)
+
+dx1 = d2 |>
+  separate_longer_delim(`IEEE Terms`,delim = ";")
+
+# dx2 = dx1 |>
+#   filter(!is.na(`IEEE Terms`)) |>
+#   mutate(`IEEE Terms` = toupper(`IEEE Terms`)) |>
+#   filter(`IEEE Terms` != "METAVERSE")
+
+```
+
+
+```{r}
+library(igraph)
+library(visNetwork)
+
+dg = d2 |>
+  #filter(!is.na(`Publication Year`)) |>
+  #filter(!is.na(`Date Added To Xplore`) & `Date Added To Xplore` < as.Date("2024-11-01")) |>
+  #filter(`Publication Year` > 2020) |>
+  mutate(`IEEE Terms` = toupper(`IEEE Terms`))
+
+table(dg$`Publication Year`)
+
+dg$ID <- seq.int(nrow(dg))
+
+dg = dg |>
+  relocate(ID, .before = `Date Added To Xplore`)
+
+dgx = dg |> 
+  separate_longer_delim(`IEEE Terms`, delim = ";") |>
+  #separate_rows(IDs) %>% 
+  group_by(`Publication Year`) |> 
+  do(data.frame(t(combn(.$`IEEE Terms`, 2)))) |> 
+  select(X1, X2, color = `Publication Year`) |>
+  ungroup() |>
+  filter(!is.na(X2)) |>
+  filter(!is.na(X1)) 
+  # filter(X1 != "METAVERSE") |>
+  # filter(X2 != "METAVERSE")
+
+dgx1 = dgx |>
+  group_by(X1,X2,color) |>
+  summarise(count = n()) |>
+  ungroup() |>
+  filter(!(X1 == X2))
+
+rbind(dgx1 |> select(X1) |> rename(label = X1),dgx1 |> select(X2) |> rename(label = X2)) |>
+  distinct(label) 
+
+edx1 = dgx1 |>
+  filter(X1 %in% c("EDUCATION","EDUCATIONAL INSTITUTIONS","EDUCATIONAL PROGRAMS","EDUCATIONAL TECHNOLOGY","ELECTRONIC LEARNING","HYBRID LEARNING","LEARNING SYSTEMS","LEARNING MANAGEMENT SYSTEMS","TRAINING") | X2 %in% c("EDUCATION","EDUCATIONAL INSTITUTIONS","EDUCATIONAL PROGRAMS","EDUCATIONAL TECHNOLOGY","ELECTRONIC LEARNING","HYBRID LEARNING","LEARNING SYSTEMS","LEARNING MANAGEMENT SYSTEMS","TRAINING"))
+
+```
+
+```{r}
+edges_x = dgx1 |>
+  select(X1,X2,count) |>
+  rename(weight = count) |>
+  mutate(width = weight / 500) |>
+  filter(weight > 1000)
+
+nodes = rbind(edges_x |> select(X1) |> rename(label = X1),edges_x |> select(X2) |> rename(label = X2)) |>
+  distinct(label) |> rowid_to_column("id")
+
+edges = edges_x |>
+      left_join(nodes, by = c("X1" = "label")) |>
+      rename(from = id)
+    
+edges = edges |>
+      left_join(nodes, by = c("X2" = "label")) |>
+      rename(to = id)
+
+edges = select(edges, from, to, weight, width)
+
+graph = graph.data.frame(edges, directed = T)
+
+degree_value = degree(graph)
+
+nodes$value = degree_value[match(nodes$id, names(degree_value))]
+    
+visNetwork(nodes, edges) %>%
+      visIgraphLayout(layout = "layout_with_fr") %>%
+      visOptions(manipulation = TRUE) %>%
+      visEdges(arrows = "middle") %>%
+      visInteraction(multiselect = TRUE, navigationButtons = TRUE)
+```
+
+## Clustering
+
+```{r}
+
+dgx2 = dgx1 |>
+  group_by(X1,X2) |>
+  summarise(count = sum(count)) |>
+  ungroup()
+
+edges_x = dgx2 |>
+  rename(weight = count) |>
+  rename(from = X1, to = X2) |>
+  mutate(width = weight / 2000) |>
+  filter(weight > 600 | (from %in% c("METAVERSE") & width >= 27 / 2000) | (to %in% c("METAVERSE") & width >= 27 / 2000))
+
+nodes = rbind(edges_x |> select(from) |> rename(label = from),edges_x |> select(to) |> rename(label = to)) |>
+  distinct(label) |> mutate(id = label) |> relocate(id,.before = label)
+
+edges = edges_x
+    
+graph <- graph_from_data_frame(edges, directed = FALSE)
+
+degree_value = degree(graph)
+
+nodes$value = degree_value[match(nodes$id, names(degree_value))]
+
+
+#Louvain Comunity Detection
+cluster <- cluster_infomap(graph)
+
+cluster_df = bind_cols(data.frame(cluster$names),data.frame(cluster$membership)) |>
+  rename(label = cluster.names, group = cluster.membership)
+
+# ## MANIPULATION
+# 
+# write_xlsx(cluster_df,"cluster_df.xlsx")
+# 
+# ## EDITED
+# 
+# cluster_df_e = read_xlsx("cluster_df.xlsx")
+
+#Create group column
+nodes <- merge(x = nodes, y = cluster_df, by = "label", all.x = TRUE)
+
+edges_edu = edges |>
+  filter(from %in% c("EDUCATION"))
+
+
+visNetwork(nodes, edges_edu, width = "100%", height = "100vh") %>%
+      visIgraphLayout(layout = "layout_nicely") %>%
+      visOptions(manipulation = TRUE) %>%
+      visInteraction(multiselect = TRUE, navigationButtons = TRUE)
+
+```
+
+```{r}
+dgx2 |>
+  filter(X1 %in% c("METAVERSE")) |>
+  arrange(desc(count))
+```
+
+```{r}
+dgx2 |>
+  filter(X2 %in% c("METAVERSE")) |>
+  arrange(desc(count))
+```
+
+
+```{r}
+clf = read_xlsx("cluster_details_metaverse.xlsx")
+
+clf |>
+  group_by(`CLUSTER TOPIC`,`CLUSTER NUMBER`) |>
+  summarise(Keywords = paste(TERMS,collapse = ", ")) |>
+  ungroup() |>
+  arrange(`CLUSTER NUMBER`) |>
+  write_xlsx("Cluster_Details.xlsx")
+```
+
+
+
+
+```{r}
+library(tidygraph)
+
+ed = edges_x |>
+  select(X1,X2,weight) |>
+  rename(from = X1,to = X2,Frequency = weight)
+
+va = nodes |>
+  select(label,value) |>
+  rename(Occurences = value)
+
+ig <- igraph::graph_from_data_frame(d=ed, vertices=va, directed = FALSE)
+
+
+
+tg <- tidygraph::as_tbl_graph(ig) %>% 
+  tidygraph::activate(nodes) %>% 
+  dplyr::mutate(label=name)
+```
+
+
+```{r}
+library(ggraph)
+
+# set seed
+set.seed(12345)
+# edge size shows frequency of co-occurrence
+tg %>%
+   ggraph(layout = "fr") +
+   geom_edge_arc(colour= "gray50",
+                 lineend = "round",
+                 strength = .1,
+                 alpha = .1) +
+   geom_node_text(aes(label = name), 
+                  repel = TRUE, 
+                  point.padding = unit(0.2, "lines"), 
+                  colour="gray10") +
+  theme_graph(background = "white") +
+  guides(edge_width = FALSE,
+         edge_alpha = FALSE)
+```
+
+
+```{r}
+v.size <- V(tg)$Occurences
+
+E(tg)$weight <- E(tg)$Frequency
+
+# set seed
+set.seed(12345)
+# edge size shows frequency of co-occurrence
+g1 = tg %>%
+   ggraph(layout = "kk") +
+   geom_edge_arc(colour= "gray50",
+                  lineend = "round",
+                 strength = .1) +
+   geom_node_point(aes(size=log(v.size)*2,
+                   color = as.factor(name)),
+                   show.legend = F) +
+   geom_node_text(aes(label = name), 
+                  repel = TRUE, 
+                  point.padding = unit(0.2, "lines"), 
+                  size=sqrt(v.size), 
+                  colour="gray10") +
+  scale_edge_width(range = c(0, 2.5)) +
+  scale_edge_alpha(range = c(0, .3)) +
+  theme_graph(background = "white") +
+  guides(edge_width = FALSE,
+         edge_alpha = FALSE)
+
+g1
+```
+
+
+### EDUCATION
+
+```{r}
+edx1 = dgx1 |>
+  filter(X1 %in% c("EDUCATION","EDUCATIONAL INSTITUTIONS","EDUCATIONAL PROGRAMS","EDUCATIONAL TECHNOLOGY") | X2 %in% c("EDUCATION","EDUCATIONAL INSTITUTIONS","EDUCATIONAL PROGRAMS","EDUCATIONAL TECHNOLOGY"))
+
+edx2 = edx1 |>
+  group_by(X1,X2) |>
+  summarise(count = sum(count)) |>
+  ungroup()
+
+edges_x = edx2 |>
+  rename(weight = count) |>
+  rename(from = X1, to = X2) |>
+  mutate(width = weight / 500) |>
+  filter(weight > 30)
+
+nodes = rbind(edges_x |> select(from) |> rename(label = from),edges_x |> select(to) |> rename(label = to)) |>
+  distinct(label) |> mutate(id = label) |> relocate(id,.before = label)
+
+edges = edges_x
+    
+graph <- graph_from_data_frame(edges, directed = FALSE)
+
+degree_value = degree(graph)
+
+nodes$value = degree_value[match(nodes$id, names(degree_value))]
+
+
+#Louvain Comunity Detection
+cluster <- cluster_infomap(graph)
+
+cluster_df = bind_cols(data.frame(cluster$names),data.frame(cluster$membership)) |>
+  rename(label = cluster.names, group = cluster.membership)
+
+#Create group column
+nodes <- merge(x = nodes, y = cluster_df, by = "label", all.x = TRUE)
+
+
+visNetwork(nodes, edges) %>%
+      visIgraphLayout(layout = "layout_with_fr") %>%
+      visOptions(manipulation = TRUE) %>%
+      visInteraction(multiselect = TRUE, navigationButtons = TRUE)
+
+```
+
+
+
+```{r}
+library(tidygraph)
+
+ed = edges_x |>
+  select(X1,X2,weight) |>
+  rename(from = X1,to = X2,Frequency = weight)
+
+va = nodes |>
+  select(label,value) |>
+  rename(Occurences = value)
+
+ig <- igraph::graph_from_data_frame(d=ed, vertices=va, directed = FALSE)
+
+
+
+tg <- tidygraph::as_tbl_graph(ig) %>% 
+  tidygraph::activate(nodes) %>% 
+  dplyr::mutate(label=name)
+```
+
+
+```{r}
+library(ggraph)
+
+# set seed
+set.seed(12345)
+# edge size shows frequency of co-occurrence
+tg %>%
+   ggraph(layout = "fr") +
+   geom_edge_arc(colour= "gray50",
+                 lineend = "round",
+                 strength = .1,
+                 alpha = .1) +
+   geom_node_text(aes(label = name), 
+                  repel = TRUE, 
+                  point.padding = unit(0.2, "lines"), 
+                  colour="gray10") +
+  theme_graph(background = "white") +
+  guides(edge_width = FALSE,
+         edge_alpha = FALSE)
+```
+
+
+```{r}
+v.size <- V(tg)$Occurences
+
+E(tg)$weight <- E(tg)$Frequency
+
+# set seed
+set.seed(12345)
+# edge size shows frequency of co-occurrence
+g1 = tg %>%
+   ggraph(layout = "kk") +
+   geom_edge_arc(colour= "gray50",
+                  lineend = "round",
+                 strength = .1) +
+   geom_node_point(size=log(v.size)*2) +
+   geom_node_text(aes(label = name), 
+                  repel = TRUE, 
+                  point.padding = unit(0.2, "lines"), 
+                  size=3, 
+                  colour="gray10") +
+  scale_edge_width(range = c(0, 2.5)) +
+  scale_edge_alpha(range = c(0, .3)) +
+  theme_graph(background = "white") +
+  guides(edge_width = FALSE,
+         edge_alpha = FALSE)
+
+g1
+```
+
+
+
+
+
+
+```{r}
+dgx
+```
+
+
+
+```{r}
+library(wordcloud2)
+```
+
+
+
+```{r}
+dx2 |>
+  group_by(`IEEE Terms`) |>
+  summarise(count = n()) |>
+  ungroup() |>
+  arrange(desc(count)) |>
+  slice_head(n = 20) |>
+  write_xlsx("IEEE TERMS UPDATED 2024.xlsx")
+```
+
+```{r}
+library(wordcloud2)
+```
+
+
+```{r}
+dx2 |>
+  rename(word = `IEEE Terms`) |>
+  group_by(word) |>
+  summarise(count = n()) |>
+  ungroup() |>
+  wordcloud2(color='random-dark',size = .2, minRotation = 0, maxRotation = 0, rotateRatio = 1)
+```
+
+### IEEE EDUCATION
+
+```{r}
+ieee_edu = read_xlsx("IEEE METAVERSE EDUCATION AND HEALTH LIST.xlsx",sheet = "Education") 
+
+d1_edu = ieee_edu |>
+  mutate(`Date Added To Xplore` = as.Date(`Date Added To Xplore`)) |>
+  mutate(`Online Date` = as.Date(`Online Date`)) |>
+  select(`Document Title`,`Date Added To Xplore`,`Publication Year`,Abstract,`IEEE Terms`,`Reference Count`,`Article Citation Count`,`Online Date`)
+
+##UPDATE
+
+d1 %>%
+  filter(str_detect(tolower(`IEEE Terms`),"education")) |>
+  filter(!is.na(`Date Added To Xplore`) & `Date Added To Xplore` < as.Date("2024-11-01")) %>%
+  filter(`Publication Year` > 2020) %>%
+  count(DATE = as.yearmon(`Date Added To Xplore`, "%m/%d/%Y")) %>%
+  mutate(`IEEE Publications on Metaverse on Education` = n) %>%
+  ggplot(aes(DATE, `IEEE Publications on Metaverse on Education`)) +
+    geom_line(color = "#00AFBB",size=.8) +
+    geom_point(color = "#FC4E07") +
+    scale_x_yearmon() +
+  theme_bw() + 
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    legend.background = element_rect(
+      fill = "white", 
+      linewidth = 4, 
+      colour = "white"
+    ),
+    legend.justification = c(0, 1),
+    legend.position = c(0, 1),
+    axis.ticks = element_line(colour = "grey70", linewidth = 1),
+    panel.grid.major = element_line(colour = "grey70", linewidth = 0.2),
+    panel.grid.minor = element_blank()
+  )
+
+
+```
+
+```{r}
+library(zoo)
+
+d1_edu %>%
+  filter(!is.na(`Date Added To Xplore`)) %>%
+  filter(`Publication Year` > 2020) %>%
+  count(DATE = as.yearmon(`Date Added To Xplore`, "%m/%d/%Y")) %>%
+  mutate(`IEEE Publications on Metaverse on Education` = n) %>%
+  ggplot(aes(DATE, `IEEE Publications on Metaverse on Education`)) +
+    geom_line(color = "#00AFBB") +
+    geom_point(color = "#FC4E07") +
+    scale_x_yearmon() +
+  theme_bw() + 
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    legend.background = element_rect(
+      fill = "white", 
+      linewidth = 4, 
+      colour = "white"
+    ),
+    legend.justification = c(0, 1),
+    legend.position = c(0, 1),
+    axis.ticks = element_line(colour = "grey70", linewidth = 0.2),
+    panel.grid.major = element_line(colour = "grey70", linewidth = 0.2),
+    panel.grid.minor = element_blank()
+  )
+```
+
+
+```{r}
+d1 |>
+  filter(str_detect(tolower(`IEEE Terms`),"education")) |>
+  filter(!is.na(`Date Added To Xplore`) & `Date Added To Xplore` < as.Date("2024-11-01"))
+
+
+d2_edu = d1 |>
+  filter(str_detect(tolower(`IEEE Terms`),"education")) |>
+  filter(!is.na(`Date Added To Xplore`) & `Date Added To Xplore` < as.Date("2024-11-01")) |>
+  select(`Date Added To Xplore`,`Publication Year`,`Article Citation Count`,`IEEE Terms`)
+
+dx1_edu = d2_edu |>
+  separate_longer_delim(`IEEE Terms`,delim = ";")
+
+dx2_edu = dx1_edu |>
+  filter(!is.na(`IEEE Terms`)) |>
+  mutate(`IEEE Terms` = toupper(`IEEE Terms`))
+  #filter(`IEEE Terms` != "METAVERSE")
+
+```
+
+
+```{r}
+dx2_edu |>
+  group_by(`IEEE Terms`) |>
+  summarise(count = n()) |>
+  ungroup() |>
+  arrange(desc(count)) |>
+  slice_head(n = 25) |>
+  write_xlsx("META_EDU TERMS UPDATED 2024.xlsx")
+```
+
+
+
+```{r}
+dx2_edu |>
+  rename(word = `IEEE Terms`) |>
+  group_by(word) |>
+  summarise(count = n()) |>
+  ungroup() |>
+  wordcloud2(color='random-dark',size = 0.6, minSize = 0.5, minRotation = 0, maxRotation = 0, rotateRatio = 1)
+```
+
+### SCIENCE DIRECT
+
+```{r}
+sd_edu = read_xlsx("Education_Metaverse_Sciencedirect.xlsx") 
+
+sd_d1_edu = sd_edu |>
+  select(`Publication year`,`Volume`,`Date published`,Abstract,`Keywords`)
+
+
+```
+
+```{r}
+library(zoo)
+
+d1_edu %>%
+  filter(!is.na(`Date Added To Xplore`)) %>%
+  filter(`Publication Year` > 2020) %>%
+  count(DATE = as.yearmon(`Date Added To Xplore`, "%m/%d/%Y")) %>%
+  mutate(`IEEE Publications on Metaverse on Education` = n) %>%
+  ggplot(aes(DATE, `IEEE Publications on Metaverse on Education`)) +
+    geom_line() +
+    geom_point() +
+    scale_x_yearmon() +
+  theme_bw() + 
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    legend.background = element_rect(
+      fill = "white", 
+      linewidth = 4, 
+      colour = "white"
+    ),
+    legend.justification = c(0, 1),
+    legend.position = c(0, 1),
+    axis.ticks = element_line(colour = "grey70", linewidth = 0.2),
+    panel.grid.major = element_line(colour = "grey70", linewidth = 0.2),
+    panel.grid.minor = element_blank()
+  )
+```
+
+
+```{r}
+sd_d2_edu = sd_d1_edu |>
+  select(`Publication year`,`Volume`,`Date published`,Abstract,`Keywords`)
+
+sd_dx1_edu = sd_d2_edu |>
+  separate_longer_delim(`Keywords`,delim = ",")
+
+sd_dx2_edu = sd_dx1_edu |>
+  filter(!is.na(`Keywords`)) |>
+  mutate(`Keywords` = toupper(`Keywords`))
+  #filter(`IEEE Terms` != "METAVERSE")
+
+```
+
+
+```{r}
+sd_dx2_edu |>
+  group_by(`Keywords`) |>
+  summarise(count = n()) |>
+  ungroup() |>
+  arrange(desc(count)) |>
+  #slice_head(n = 25) |>
+  write_xlsx("META_EDU TERMS SD.xlsx")
+```
+
+
+
+```{r}
+dx2_edu |>
+  rename(word = `IEEE Terms`) |>
+  group_by(word) |>
+  summarise(count = n()) |>
+  ungroup() |>
+  wordcloud2(color='random-dark',size = 0.6, minSize = 0.5, minRotation = 0, maxRotation = 0, rotateRatio = 1)
+```
+
